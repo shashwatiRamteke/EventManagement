@@ -20,4 +20,11 @@ public class Event
     public TimeSpan Time { get; set; }
 
     public int TotalTicketing { get; set; }
+
+    // Each event has exactly one tier type
+    public int TierId { get; set; }
+    public Tier Tier { get; set; } = null!;
+
+    // Selected categories from that tier
+    public ICollection<EventTierCategory> EventTierCategories { get; set; } = [];
 }
