@@ -44,16 +44,35 @@ public class EventsController : ControllerBase
     }
 
     [HttpPost]
-    public async Task<ActionResult<EventResponse>> CreateEvent(Event ev)
+    public async Task<ActionResult<EventResponse>> CreateEvent(CreateEventRequest request)
     {
+        var tier = await _context.Tiers.FindAsync(request.TierId);
+        if (tier is null)
+            return BadRequest($"Tier with id {request.TierId} not found.");
+
+        var categories = await _context.TierCategories
+            .Where(tc => request.TierCategoryIds.Contains(tc.Id) && tc.TierId == request.TierId)
+            .ToListAsync();
+
+        if (categories.Count != request.TierCategoryIds.Count)
+            return BadRequest("One or more TierCategoryIds are invalid or do not belong to the specified tier.");
+
+        var ev = new Event
+        {
+            Name = request.Name,
+            Description = request.Description,
+            Venue = request.Venue,
+            Date = request.Date,
+            Time = request.Time,
+            TotalTicketing = request.TotalTicketing,
+            Tier = tier,
+            EventTierCategories = categories
+                .Select(c => new EventTierCategory { TierCategory = c })
+                .ToList()
+        };
+
         _context.Events.Add(ev);
         await _context.SaveChangesAsync();
-
-        // Reload with tier data so the response includes tier details
-        await _context.Entry(ev).Reference(e => e.Tier).LoadAsync();
-        await _context.Entry(ev).Collection(e => e.EventTierCategories).Query()
-            .Include(etc => etc.TierCategory)
-            .LoadAsync();
 
         return CreatedAtAction(nameof(GetEvent), new { id = ev.Id }, ToResponse(ev));
     }
