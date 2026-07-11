@@ -1,0 +1,26 @@
+{
+  "version": 2,
+  "dgSpecHash": "3jd/TEFJPHQ=",
+  "success": true,
+  "projectFilePath": "C:\\Users\\ramte\\ShashPrep\\EventManagement\\EventManagementApi2\\EventManagementApi2\\EventManagementApi2.csproj",
+  "expectedPackageFiles": [
+    "C:\\Users\\ramte\\.nuget\\packages\\microsoft.aspnetcore.openapi\\10.0.9\\microsoft.aspnetcore.openapi.10.0.9.nupkg.sha512",
+    "C:\\Users\\ramte\\.nuget\\packages\\microsoft.openapi\\2.0.0\\microsoft.openapi.2.0.0.nupkg.sha512",
+    "C:\\Users\\ramte\\.nuget\\packages\\microsoft.visualstudio.azure.containers.tools.targets\\1.23.0\\microsoft.visualstudio.azure.containers.tools.targets.1.23.0.nupkg.sha512",
+    "C:\\Users\\ramte\\.nuget\\packages\\scalar.aspnetcore\\2.16.11\\scalar.aspnetcore.2.16.11.nupkg.sha512"
+  ],
+  "logs": [
+    {
+      "code": "NU1903",
+      "level": "Warning",
+      "message": "Package 'Microsoft.OpenApi' 2.0.0 has a known high severity vulnerability, https://github.com/advisories/GHSA-v5pm-xwqc-g5wc",
+      "projectPath": "C:\\Users\\ramte\\ShashPrep\\EventManagement\\EventManagementApi2\\EventManagementApi2\\EventManagementApi2.csproj",
+      "warningLevel": 1,
+      "filePath": "C:\\Users\\ramte\\ShashPrep\\EventManagement\\EventManagementApi2\\EventManagementApi2\\EventManagementApi2.csproj",
+      "libraryId": "Microsoft.OpenApi",
+      "targetGraphs": [
+        "net10.0"
+      ]
+    }
+  ]
+}
