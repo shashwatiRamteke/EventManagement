@@ -1,10 +1,13 @@
 using Scalar.AspNetCore;
+using Microsoft.EntityFrameworkCore;
+using EventManagementApi2.Data;
 
 var builder = WebApplication.CreateBuilder(args);
 
 // Add services to the container.
 
 builder.Services.AddControllers();
+builder.Services.AddDbContext<EventContext>(options => options.UseInMemoryDatabase("EventsDb"));
 // Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
 builder.Services.AddOpenApi();
 
@@ -22,5 +25,11 @@ app.UseHttpsRedirection();
 app.UseAuthorization();
 
 app.MapControllers();
+
+using (var scope = app.Services.CreateScope())
+{
+    var context = scope.ServiceProvider.GetRequiredService<EventContext>();
+    EventSeeder.Seed(context);
+}
 
 app.Run();
