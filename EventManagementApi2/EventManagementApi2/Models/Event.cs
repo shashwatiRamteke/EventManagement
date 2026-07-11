@@ -27,4 +27,7 @@ public class Event
 
     // Selected categories from that tier
     public ICollection<EventTierCategory> EventTierCategories { get; set; } = [];
+
+    // Tickets purchased for this event
+    public ICollection<Ticket> Tickets { get; set; } = [];
 }

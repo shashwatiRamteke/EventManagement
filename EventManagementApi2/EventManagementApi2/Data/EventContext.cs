@@ -13,6 +13,7 @@ public class EventContext : DbContext
     public DbSet<Tier> Tiers { get; set; } = null!;
     public DbSet<TierCategory> TierCategories { get; set; } = null!;
     public DbSet<EventTierCategory> EventTierCategories { get; set; } = null!;
+    public DbSet<Ticket> Tickets { get; set; } = null!;
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -35,5 +36,20 @@ public class EventContext : DbContext
             .HasOne(etc => etc.TierCategory)
             .WithMany(tc => tc.EventTierCategories)
             .HasForeignKey(etc => etc.TierCategoryId);
+
+        // Ticket relationships
+        modelBuilder.Entity<Ticket>()
+            .HasOne(t => t.Event)
+            .WithMany(e => e.Tickets)
+            .HasForeignKey(t => t.EventId);
+
+        modelBuilder.Entity<Ticket>()
+            .HasOne(t => t.Category)
+            .WithMany(tc => tc.Tickets)
+            .HasForeignKey(t => t.CategoryId);
+
+        modelBuilder.Entity<Ticket>()
+            .HasIndex(t => t.TicketNumber)
+            .IsUnique();
     }
 }

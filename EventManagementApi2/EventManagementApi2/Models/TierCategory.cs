@@ -14,4 +14,6 @@ public class TierCategory
     public Tier Tier { get; set; } = null!;
 
     public ICollection<EventTierCategory> EventTierCategories { get; set; } = [];
+
+    public ICollection<Ticket> Tickets { get; set; } = [];
 }
