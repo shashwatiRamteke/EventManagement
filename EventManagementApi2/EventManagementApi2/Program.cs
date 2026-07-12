@@ -11,6 +11,12 @@ builder.Services.AddControllers();
 builder.Services.AddDbContext<EventContext>(options => 
     options.UseInMemoryDatabase("EventsDb"));
 
+// Register repositories and unit of work
+builder.Services.AddScoped<EventManagementApi2.Data.Repositories.IEventRepository, EventManagementApi2.Data.Repositories.EventRepository>();
+builder.Services.AddScoped<EventManagementApi2.Data.Repositories.ITierCategoryRepository, EventManagementApi2.Data.Repositories.TierCategoryRepository>();
+builder.Services.AddScoped<EventManagementApi2.Data.Repositories.ITicketRepository, EventManagementApi2.Data.Repositories.TicketRepository>();
+builder.Services.AddScoped<EventManagementApi2.Data.IUnitOfWork, EventManagementApi2.Data.UnitOfWork>();
+
 // OpenAPI/Scalar configuration
 builder.Services.AddOpenApi();
 

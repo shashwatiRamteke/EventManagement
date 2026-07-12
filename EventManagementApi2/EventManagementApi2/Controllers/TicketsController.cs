@@ -1,5 +1,4 @@
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
 using EventManagementApi2.Data;
 using EventManagementApi2.Models;
 
@@ -9,11 +8,11 @@ namespace EventManagementApi2.Controllers;
 [Route("api/[controller]")]
 public class TicketsController : ControllerBase
 {
-    private readonly EventContext _context;
+    private readonly IUnitOfWork _uow;
 
-    public TicketsController(EventContext context)
+    public TicketsController(IUnitOfWork uow)
     {
-        _context = context;
+        _uow = uow;
     }
 
     /// <summary>
@@ -26,18 +25,13 @@ public class TicketsController : ControllerBase
     public async Task<ActionResult<PurchaseTicketResponse>> PurchaseTickets(PurchaseTicketRequest request)
     {
         // Validate event exists
-        var evt = await _context.Events
-            .Include(e => e.EventTierCategories)
-            .FirstOrDefaultAsync(e => e.Id == request.EventId);
-
+        var evt = await _uow.Events.GetByIdAsync(request.EventId);
         if (evt is null)
             return NotFound(new { error = "Event not found" });
 
         // Validate category is associated with this event and tier
-        var category = await _context.TierCategories
-            .FirstOrDefaultAsync(tc => tc.Id == request.CategoryId && tc.TierId == evt.TierId);
-
-        if (category is null)
+        var category = await _uow.TierCategories.GetByIdAsync(request.CategoryId);
+        if (category is null || category.TierId != evt.TierId)
             return BadRequest(new { error = "Category not found or not associated with this tier" });
 
         // Check if category is in the event's selected categories
@@ -48,9 +42,7 @@ public class TicketsController : ControllerBase
             return BadRequest(new { error = "This category is not available for this event" });
 
         // Check ticket availability
-        var soldTickets = await _context.Tickets
-            .Where(t => t.EventId == request.EventId && t.CategoryId == request.CategoryId)
-            .CountAsync();
+        var soldTickets = await _uow.Tickets.CountByEventAndCategoryAsync(request.EventId, request.CategoryId);
 
         if (soldTickets + request.Quantity > evt.TotalTicketing)
             return BadRequest(new { error = $"Only {evt.TotalTicketing - soldTickets} tickets available for this category" });
@@ -97,8 +89,8 @@ public class TicketsController : ControllerBase
             });
         }
 
-        _context.Tickets.AddRange(tickets);
-        await _context.SaveChangesAsync();
+        await _uow.Tickets.AddRangeAsync(tickets);
+        await _uow.SaveChangesAsync();
 
         var totalPrice = tickets.Sum(t => t.Price);
 
@@ -121,12 +113,7 @@ public class TicketsController : ControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<TicketListResponse>> GetTicketsByEmail(string email)
     {
-        var tickets = await _context.Tickets
-            .Include(t => t.Event)
-            .Include(t => t.Category)
-            .Where(t => t.BuyerEmail == email)
-            .OrderByDescending(t => t.PurchaseDate)
-            .ToListAsync();
+        var tickets = await _uow.Tickets.GetByBuyerEmailAsync(email);
 
         if (tickets.Count == 0)
             return NotFound(new { error = "No tickets found for this email" });
@@ -163,10 +150,7 @@ public class TicketsController : ControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<TicketResponse>> GetTicket(int id)
     {
-        var ticket = await _context.Tickets
-            .Include(t => t.Event)
-            .Include(t => t.Category)
-            .FirstOrDefaultAsync(t => t.Id == id);
+        var ticket = await _uow.Tickets.GetByIdAsync(id);
 
         if (ticket is null)
             return NotFound(new { error = "Ticket not found" });
@@ -199,16 +183,11 @@ public class TicketsController : ControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<TicketListResponse>> GetEventTickets(int eventId)
     {
-        var evt = await _context.Events.FindAsync(eventId);
+        var evt = await _uow.Events.GetByIdAsync(eventId);
         if (evt is null)
             return NotFound(new { error = "Event not found" });
 
-        var tickets = await _context.Tickets
-            .Include(t => t.Event)
-            .Include(t => t.Category)
-            .Where(t => t.EventId == eventId)
-            .OrderByDescending(t => t.PurchaseDate)
-            .ToListAsync();
+        var tickets = await _uow.Tickets.GetByEventIdAsync(eventId);
 
         var responses = tickets.Select(t => new TicketResponse
         {
@@ -243,10 +222,7 @@ public class TicketsController : ControllerBase
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     public async Task<ActionResult<TicketResponse>> MarkTicketAsUsed(int id)
     {
-        var ticket = await _context.Tickets
-            .Include(t => t.Event)
-            .Include(t => t.Category)
-            .FirstOrDefaultAsync(t => t.Id == id);
+        var ticket = await _uow.Tickets.GetByIdAsync(id);
 
         if (ticket is null)
             return NotFound(new { error = "Ticket not found" });
@@ -255,7 +231,7 @@ public class TicketsController : ControllerBase
             return BadRequest(new { error = $"Cannot mark ticket as used. Current status: {ticket.Status}" });
 
         ticket.Status = TicketStatus.Used;
-        await _context.SaveChangesAsync();
+        await _uow.SaveChangesAsync();
 
         var response = new TicketResponse
         {
@@ -286,10 +262,7 @@ public class TicketsController : ControllerBase
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     public async Task<ActionResult<TicketResponse>> CancelTicket(int id)
     {
-        var ticket = await _context.Tickets
-            .Include(t => t.Event)
-            .Include(t => t.Category)
-            .FirstOrDefaultAsync(t => t.Id == id);
+        var ticket = await _uow.Tickets.GetByIdAsync(id);
 
         if (ticket is null)
             return NotFound(new { error = "Ticket not found" });
@@ -301,7 +274,7 @@ public class TicketsController : ControllerBase
             return BadRequest(new { error = $"Ticket is already {ticket.Status}" });
 
         ticket.Status = TicketStatus.Cancelled;
-        await _context.SaveChangesAsync();
+        await _uow.SaveChangesAsync();
 
         var response = new TicketResponse
         {
@@ -331,13 +304,11 @@ public class TicketsController : ControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<TicketStatistics>> GetEventStatistics(int eventId)
     {
-        var evt = await _context.Events.FindAsync(eventId);
+        var evt = await _uow.Events.GetByIdAsync(eventId);
         if (evt is null)
             return NotFound(new { error = "Event not found" });
 
-        var tickets = await _context.Tickets
-            .Where(t => t.EventId == eventId)
-            .ToListAsync();
+        var tickets = await _uow.Tickets.GetByEventIdRawAsync(eventId);
 
         var stats = new TicketStatistics
         {
