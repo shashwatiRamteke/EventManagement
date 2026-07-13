@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using EventManagementApi2.Data;
 using EventManagementApi2.Models;
+using EventManagementApi2.Services;
 
 namespace EventManagementApi2.Controllers;
 
@@ -9,21 +10,19 @@ namespace EventManagementApi2.Controllers;
 [Route("api/[controller]")]
 public class EventsController : ControllerBase
 {
-    private readonly EventContext _context;
+    private readonly IUnitOfWork _uow;
+    private readonly IInventoryService _inventory;
 
-    public EventsController(EventContext context)
+    public EventsController(IUnitOfWork uow, IInventoryService inventory)
     {
-        _context = context;
+        _uow = uow;
+        _inventory = inventory;
     }
 
     [HttpGet]
     public async Task<ActionResult<IEnumerable<EventResponse>>> GetEvents()
     {
-        var events = await _context.Events
-            .Include(e => e.Tier)
-            .Include(e => e.EventTierCategories)
-                .ThenInclude(etc => etc.TierCategory)
-            .ToListAsync();
+        var events = await _uow.Events.GetAllWithDetailsAsync();
 
         return Ok(events.Select(ToResponse));
     }
@@ -31,11 +30,7 @@ public class EventsController : ControllerBase
     [HttpGet("{id}")]
     public async Task<ActionResult<EventResponse>> GetEvent(int id)
     {
-        var ev = await _context.Events
-            .Include(e => e.Tier)
-            .Include(e => e.EventTierCategories)
-                .ThenInclude(etc => etc.TierCategory)
-            .FirstOrDefaultAsync(e => e.Id == id);
+        var ev = await _uow.Events.GetByIdWithDetailsAsync(id);
 
         if (ev == null)
             return NotFound();
@@ -46,16 +41,30 @@ public class EventsController : ControllerBase
     [HttpPost]
     public async Task<ActionResult<EventResponse>> CreateEvent(CreateEventRequest request)
     {
-        var tier = await _context.Tiers.FindAsync(request.TierId);
+        var tier = await _uow.Events.GetTierByIdAsync(request.TierId);
         if (tier is null)
             return BadRequest($"Tier with id {request.TierId} not found.");
 
-        var categories = await _context.TierCategories
-            .Where(tc => request.TierCategoryIds.Contains(tc.Id) && tc.TierId == request.TierId)
-            .ToListAsync();
+        var categories = await _uow.Events.GetTierCategoriesAsync(request.TierCategoryIds, request.TierId);
 
         if (categories.Count != request.TierCategoryIds.Count)
             return BadRequest("One or more TierCategoryIds are invalid or do not belong to the specified tier.");
+
+        // Calculate equal distribution of tickets among categories
+        var ticketsPerCategory = request.TotalTicketing / categories.Count;
+        var remainder = request.TotalTicketing % categories.Count;
+
+        var eventTierCategories = new List<EventTierCategory>();
+        for (int i = 0; i < categories.Count; i++)
+        {
+            // First 'remainder' categories get one extra ticket
+            var maxTickets = ticketsPerCategory + (i < remainder ? 1 : 0);
+            eventTierCategories.Add(new EventTierCategory
+            {
+                TierCategory = categories[i],
+                MaxTicketsPerCategory = maxTickets
+            });
+        }
 
         var ev = new Event
         {
@@ -66,13 +75,17 @@ public class EventsController : ControllerBase
             Time = request.Time,
             TotalTicketing = request.TotalTicketing,
             Tier = tier,
-            EventTierCategories = categories
-                .Select(c => new EventTierCategory { TierCategory = c })
-                .ToList()
+            EventTierCategories = eventTierCategories
         };
 
-        _context.Events.Add(ev);
-        await _context.SaveChangesAsync();
+        await _uow.Events.AddAsync(ev);
+
+        // Seed the inventory counter for each category with its per-category capacity so
+        // purchases can reserve against the correct limit immediately.
+        foreach (var etc in eventTierCategories)
+        {
+            await _inventory.EnsureSeededAsync(ev.Id, etc.TierCategory.Id, etc.MaxTicketsPerCategory);
+        }
 
         return CreatedAtAction(nameof(GetEvent), new { id = ev.Id }, ToResponse(ev));
     }

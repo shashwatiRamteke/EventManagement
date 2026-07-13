@@ -19,9 +19,24 @@ public class TicketRepository : ITicketRepository
             .CountAsync();
     }
 
-    public async Task AddRangeAsync(IEnumerable<Ticket> tickets)
+    public async Task<int> CountByEventAsync(int eventId)
+    {
+        return await _context.Tickets
+            .Where(t => t.EventId == eventId)
+            .CountAsync();
+    }
+
+    public async Task CreateTicketsAsync(IEnumerable<Ticket> tickets)
     {
         await _context.Tickets.AddRangeAsync(tickets);
+        await _context.SaveChangesAsync();
+    }
+
+    public async Task UpdateStatusAsync(Ticket ticket, TicketStatus status)
+    {
+        ticket.Status = status;
+        _context.Tickets.Update(ticket);
+        await _context.SaveChangesAsync();
     }
 
     public async Task<List<Ticket>> GetByBuyerEmailAsync(string email)
