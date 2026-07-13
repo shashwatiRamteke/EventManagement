@@ -1,10 +1,13 @@
 using Scalar.AspNetCore;
 using Microsoft.EntityFrameworkCore;
 using EventManagementApi2.Data;
+using EventManagementApi2.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Add services to the container
+// Add services to the container.
+// Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
+builder.Services.AddOpenApi();
 builder.Services.AddControllers();
 
 // Database configuration
@@ -17,8 +20,12 @@ builder.Services.AddScoped<EventManagementApi2.Data.Repositories.ITierCategoryRe
 builder.Services.AddScoped<EventManagementApi2.Data.Repositories.ITicketRepository, EventManagementApi2.Data.Repositories.TicketRepository>();
 builder.Services.AddScoped<EventManagementApi2.Data.IUnitOfWork, EventManagementApi2.Data.UnitOfWork>();
 
-// OpenAPI/Scalar configuration
-builder.Services.AddOpenApi();
+
+// In-memory inventory to prevent overselling under concurrency (reservation/hold pattern).
+// Registered as a singleton so counters are shared across all requests.
+builder.Services.AddSingleton<IInventoryService, InMemoryInventoryService>();
+builder.Services.AddHostedService<HoldExpiryService>();
+
 
 // CORS configuration for production
 builder.Services.AddCors(options =>
@@ -85,6 +92,26 @@ using (var scope = app.Services.CreateScope())
         // Seed initial data
         EventSeeder.Seed(context);
         app.Logger.LogInformation("Database seeded successfully");
+
+        // Seed in-memory inventory counters for the seeded events/categories.
+        var inventory = scope.ServiceProvider.GetRequiredService<IInventoryService>();
+        var events = context.Events
+            .Select(e => new
+            {
+                e.Id,
+                Categories = e.EventTierCategories.Select(etc => new { etc.TierCategoryId, etc.MaxTicketsPerCategory })
+            })
+            .ToList();
+
+        foreach (var ev in events)
+        {
+            foreach (var category in ev.Categories)
+            {
+                await inventory.EnsureSeededAsync(ev.Id, category.TierCategoryId, category.MaxTicketsPerCategory);
+            }
+        }
+
+        app.Logger.LogInformation("Inventory seeded successfully");
     }
     catch (Exception ex)
     {

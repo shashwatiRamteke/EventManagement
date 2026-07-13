@@ -23,4 +23,40 @@ public class EventRepository : IEventRepository
     {
         return await _context.Events.ToListAsync();
     }
+
+    public async Task<List<Event>> GetAllWithDetailsAsync()
+    {
+        return await _context.Events
+            .Include(e => e.Tier)
+            .Include(e => e.EventTierCategories)
+                .ThenInclude(etc => etc.TierCategory)
+            .ToListAsync();
+    }
+
+    public async Task<Event?> GetByIdWithDetailsAsync(int id)
+    {
+        return await _context.Events
+            .Include(e => e.Tier)
+            .Include(e => e.EventTierCategories)
+                .ThenInclude(etc => etc.TierCategory)
+            .FirstOrDefaultAsync(e => e.Id == id);
+    }
+
+    public async Task<Tier?> GetTierByIdAsync(int tierId)
+    {
+        return await _context.Tiers.FindAsync(tierId);
+    }
+
+    public async Task<List<TierCategory>> GetTierCategoriesAsync(IReadOnlyList<int> categoryIds, int tierId)
+    {
+        return await _context.TierCategories
+            .Where(tc => categoryIds.Contains(tc.Id) && tc.TierId == tierId)
+            .ToListAsync();
+    }
+
+    public async Task AddAsync(Event ev)
+    {
+        _context.Events.Add(ev);
+        await _context.SaveChangesAsync();
+    }
 }

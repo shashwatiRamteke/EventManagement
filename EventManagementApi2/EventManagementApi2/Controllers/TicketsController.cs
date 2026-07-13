@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
 using EventManagementApi2.Data;
 using EventManagementApi2.Models;
+using EventManagementApi2.Services;
 
 namespace EventManagementApi2.Controllers;
 
@@ -9,10 +10,12 @@ namespace EventManagementApi2.Controllers;
 public class TicketsController : ControllerBase
 {
     private readonly IUnitOfWork _uow;
+    private readonly IInventoryService _inventory;
 
-    public TicketsController(IUnitOfWork uow)
+    public TicketsController(IUnitOfWork uow, IInventoryService inventory)
     {
         _uow = uow;
+        _inventory = inventory;
     }
 
     /// <summary>
@@ -41,68 +44,106 @@ public class TicketsController : ControllerBase
         if (!eventHasCategory)
             return BadRequest(new { error = "This category is not available for this event" });
 
-        // Check ticket availability
-        var soldTickets = await _uow.Tickets.CountByEventAndCategoryAsync(request.EventId, request.CategoryId);
+        // Per-category capacity is stored on the event-category link (the authoritative cap).
+        var eventCategory = evt.EventTierCategories
+            .First(etc => etc.TierCategoryId == request.CategoryId);
+        var maxTicketsForCategory = eventCategory.MaxTicketsPerCategory;
 
-        if (soldTickets + request.Quantity > evt.TotalTicketing)
-            return BadRequest(new { error = $"Only {evt.TotalTicketing - soldTickets} tickets available for this category" });
+        // Check category-level limit
+        var soldTicketsInCategory = await _uow.Tickets.CountByEventAndCategoryAsync(request.EventId, request.CategoryId);
 
-        // Generate ticket price (simplified - in real app, prices may vary by category)
-        decimal pricePerTicket = 50m; // Default price
+        if (soldTicketsInCategory + request.Quantity > maxTicketsForCategory)
+            return BadRequest(new { error = $"Only {maxTicketsForCategory - soldTicketsInCategory} tickets available for this category. Each category has a limit of {maxTicketsForCategory} tickets." });
 
-        var tickets = new List<Ticket>();
-        var ticketResponses = new List<TicketResponse>();
+        // Check event-level total capacity
+        var totalSoldTickets = await _uow.Tickets.CountByEventAsync(request.EventId);
 
-        for (int i = 0; i < request.Quantity; i++)
+        if (totalSoldTickets + request.Quantity > evt.TotalTicketing)
+            return BadRequest(new { error = $"Only {evt.TotalTicketing - totalSoldTickets} tickets remaining for this event (total capacity: {evt.TotalTicketing})" });
+
+        // Seed the per-category slot with the per-category remaining capacity (not the event
+        // total), so the atomic reservation enforces the same limit as the checks above.
+        await _inventory.EnsureSeededAsync(request.EventId, request.CategoryId, maxTicketsForCategory - soldTicketsInCategory);
+
+        // Atomically reserve inventory. This is what prevents overselling under concurrency:
+        // only one request can win the last available tickets.
+        var reservation = await _inventory.ReserveAsync(request.EventId, request.CategoryId, request.Quantity);
+
+        if (reservation.Status == ReservationStatus.InsufficientInventory)
+            return BadRequest(new { error = $"Only {reservation.Remaining} tickets available for this category" });
+
+        if (reservation.Status != ReservationStatus.Reserved || reservation.HoldId is null)
+            return BadRequest(new { error = "Unable to reserve tickets. Please try again." });
+
+        var holdId = reservation.HoldId;
+
+        try
         {
-            var ticket = new Ticket
+            // Generate ticket price (simplified - in real app, prices may vary by category)
+            decimal pricePerTicket = 50m; // Default price
+
+            var tickets = new List<Ticket>();
+            var ticketResponses = new List<TicketResponse>();
+
+            for (int i = 0; i < request.Quantity; i++)
             {
-                TicketNumber = GenerateTicketNumber(request.EventId, request.CategoryId),
-                EventId = request.EventId,
-                CategoryId = request.CategoryId,
-                BuyerName = request.BuyerName,
-                BuyerEmail = request.BuyerEmail,
-                BuyerPhone = request.BuyerPhone,
-                Price = pricePerTicket,
-                PurchaseDate = DateTime.UtcNow,
-                Status = TicketStatus.Active,
-                Notes = request.Notes
+                var ticket = new Ticket
+                {
+                    TicketNumber = GenerateTicketNumber(request.EventId, request.CategoryId),
+                    EventId = request.EventId,
+                    CategoryId = request.CategoryId,
+                    BuyerName = request.BuyerName,
+                    BuyerEmail = request.BuyerEmail,
+                    BuyerPhone = request.BuyerPhone,
+                    Price = pricePerTicket,
+                    PurchaseDate = DateTime.UtcNow,
+                    Status = TicketStatus.Active,
+                    Notes = request.Notes
+                };
+
+                tickets.Add(ticket);
+
+                ticketResponses.Add(new TicketResponse
+                {
+                    Id = ticket.Id,
+                    TicketNumber = ticket.TicketNumber,
+                    EventId = ticket.EventId,
+                    EventName = evt.Name,
+                    CategoryId = ticket.CategoryId,
+                    CategoryName = category.Name,
+                    BuyerEmail = ticket.BuyerEmail,
+                    BuyerName = ticket.BuyerName,
+                    BuyerPhone = ticket.BuyerPhone,
+                    Price = ticket.Price,
+                    PurchaseDate = ticket.PurchaseDate,
+                    Status = ticket.Status,
+                    Notes = ticket.Notes
+                });
+            }
+
+            await _uow.Tickets.CreateTicketsAsync(tickets);
+
+            // Purchase persisted successfully - confirm the hold so the inventory stays consumed.
+            await _inventory.ConfirmAsync(holdId);
+
+            var totalPrice = tickets.Sum(t => t.Price);
+
+            var response = new PurchaseTicketResponse
+            {
+                Success = true,
+                Message = $"Successfully purchased {request.Quantity} ticket(s)",
+                Tickets = ticketResponses,
+                TotalPrice = totalPrice
             };
 
-            tickets.Add(ticket);
-
-            ticketResponses.Add(new TicketResponse
-            {
-                Id = ticket.Id,
-                TicketNumber = ticket.TicketNumber,
-                EventId = ticket.EventId,
-                EventName = evt.Name,
-                CategoryId = ticket.CategoryId,
-                CategoryName = category.Name,
-                BuyerEmail = ticket.BuyerEmail,
-                BuyerName = ticket.BuyerName,
-                BuyerPhone = ticket.BuyerPhone,
-                Price = ticket.Price,
-                PurchaseDate = ticket.PurchaseDate,
-                Status = ticket.Status,
-                Notes = ticket.Notes
-            });
+            return CreatedAtAction(nameof(GetTicketsByEmail), new { email = request.BuyerEmail }, response);
         }
-
-        await _uow.Tickets.AddRangeAsync(tickets);
-        await _uow.SaveChangesAsync();
-
-        var totalPrice = tickets.Sum(t => t.Price);
-
-        var response = new PurchaseTicketResponse
+        catch
         {
-            Success = true,
-            Message = $"Successfully purchased {request.Quantity} ticket(s)",
-            Tickets = ticketResponses,
-            TotalPrice = totalPrice
-        };
-
-        return CreatedAtAction(nameof(GetTicketsByEmail), new { email = request.BuyerEmail }, response);
+            // Persisting failed - release the reserved inventory back to the pool.
+            await _inventory.ReleaseAsync(holdId);
+            throw;
+        }
     }
 
     /// <summary>
@@ -230,8 +271,7 @@ public class TicketsController : ControllerBase
         if (ticket.Status != TicketStatus.Active)
             return BadRequest(new { error = $"Cannot mark ticket as used. Current status: {ticket.Status}" });
 
-        ticket.Status = TicketStatus.Used;
-        await _uow.SaveChangesAsync();
+        await _uow.Tickets.UpdateStatusAsync(ticket, TicketStatus.Used);
 
         var response = new TicketResponse
         {
@@ -273,8 +313,7 @@ public class TicketsController : ControllerBase
         if (ticket.Status == TicketStatus.Cancelled || ticket.Status == TicketStatus.Refunded)
             return BadRequest(new { error = $"Ticket is already {ticket.Status}" });
 
-        ticket.Status = TicketStatus.Cancelled;
-        await _uow.SaveChangesAsync();
+        await _uow.Tickets.UpdateStatusAsync(ticket, TicketStatus.Cancelled);
 
         var response = new TicketResponse
         {
