@@ -1,0 +1,542 @@
+﻿using EventManagementApi2.Controllers;
+using EventManagementApi2.Data;
+using EventManagementApi2.Data.Repositories;
+using EventManagementApi2.Models;
+using EventManagementApi2.Services;
+using FluentAssertions;
+using Microsoft.AspNetCore.Mvc;
+using Moq;
+
+namespace EventManagementApi2.Tests.Controllers;
+
+public class TicketsControllerTests
+{
+    private readonly Mock<IUnitOfWork> _mockUow;
+    private readonly Mock<IEventRepository> _mockEventRepo;
+    private readonly Mock<ITierCategoryRepository> _mockTierCategoryRepo;
+    private readonly Mock<ITicketRepository> _mockTicketRepo;
+    private readonly Mock<IInventoryService> _mockInventory;
+    private readonly TicketsController _controller;
+
+    public TicketsControllerTests()
+    {
+        _mockEventRepo = new Mock<IEventRepository>();
+        _mockTierCategoryRepo = new Mock<ITierCategoryRepository>();
+        _mockTicketRepo = new Mock<ITicketRepository>();
+        _mockInventory = new Mock<IInventoryService>();
+        _mockUow = new Mock<IUnitOfWork>();
+
+        _mockUow.Setup(u => u.Events).Returns(_mockEventRepo.Object);
+        _mockUow.Setup(u => u.TierCategories).Returns(_mockTierCategoryRepo.Object);
+        _mockUow.Setup(u => u.Tickets).Returns(_mockTicketRepo.Object);
+
+        _controller = new TicketsController(_mockUow.Object, _mockInventory.Object);
+    }
+
+    [Fact]
+    public async Task PurchaseTickets_WhenEventNotFound_ReturnsNotFound()
+    {
+        // Arrange
+        var request = new PurchaseTicketRequest
+        {
+            EventId = 999,
+            CategoryId = 1,
+            Quantity = 1,
+            BuyerName = "John Doe",
+            BuyerEmail = "john@example.com"
+        };
+
+        _mockEventRepo.Setup(r => r.GetByIdAsync(999)).ReturnsAsync((Event?)null);
+
+        // Act
+        var result = await _controller.PurchaseTickets(request);
+
+        // Assert
+        result.Result.Should().BeOfType<NotFoundObjectResult>();
+    }
+
+    [Fact]
+    public async Task PurchaseTickets_WhenCategoryNotFound_ReturnsBadRequest()
+    {
+        // Arrange
+        var evt = new Event
+        {
+            Id = 1,
+            Name = "Test Event",
+            TierId = 1,
+            TotalTicketing = 100,
+            EventTierCategories = new List<EventTierCategory>
+            {
+                new() { EventId = 1, TierCategoryId = 1 }
+            }
+        };
+
+        var request = new PurchaseTicketRequest
+        {
+            EventId = 1,
+            CategoryId = 999,
+            Quantity = 1,
+            BuyerName = "John Doe",
+            BuyerEmail = "john@example.com"
+        };
+
+        _mockEventRepo.Setup(r => r.GetByIdAsync(1)).ReturnsAsync(evt);
+        _mockTierCategoryRepo.Setup(r => r.GetByIdAsync(999)).ReturnsAsync((TierCategory?)null);
+
+        // Act
+        var result = await _controller.PurchaseTickets(request);
+
+        // Assert
+        result.Result.Should().BeOfType<BadRequestObjectResult>();
+    }
+
+    [Fact]
+    public async Task PurchaseTickets_WhenCategoryNotInEventTier_ReturnsBadRequest()
+    {
+        // Arrange
+        var evt = new Event
+        {
+            Id = 1,
+            Name = "Test Event",
+            TierId = 1,
+            TotalTicketing = 100,
+            EventTierCategories = new List<EventTierCategory>
+            {
+                new() { EventId = 1, TierCategoryId = 1 }
+            }
+        };
+
+        var category = new TierCategory
+        {
+            Id = 2,
+            TierId = 2, // Different tier
+            Name = "VIP"
+        };
+
+        var request = new PurchaseTicketRequest
+        {
+            EventId = 1,
+            CategoryId = 2,
+            Quantity = 1,
+            BuyerName = "John Doe",
+            BuyerEmail = "john@example.com"
+        };
+
+        _mockEventRepo.Setup(r => r.GetByIdAsync(1)).ReturnsAsync(evt);
+        _mockTierCategoryRepo.Setup(r => r.GetByIdAsync(2)).ReturnsAsync(category);
+
+        // Act
+        var result = await _controller.PurchaseTickets(request);
+
+        // Assert
+        result.Result.Should().BeOfType<BadRequestObjectResult>();
+    }
+
+    [Fact]
+    public async Task PurchaseTickets_WhenCategoryNotAvailableForEvent_ReturnsBadRequest()
+    {
+        // Arrange
+        var evt = new Event
+        {
+            Id = 1,
+            Name = "Test Event",
+            TierId = 1,
+            TotalTicketing = 100,
+            EventTierCategories = new List<EventTierCategory>
+            {
+                new() { EventId = 1, TierCategoryId = 1 }
+            }
+        };
+
+        var category = new TierCategory
+        {
+            Id = 2,
+            TierId = 1,
+            Name = "Standard"
+        };
+
+        var request = new PurchaseTicketRequest
+        {
+            EventId = 1,
+            CategoryId = 2,
+            Quantity = 1,
+            BuyerName = "John Doe",
+            BuyerEmail = "john@example.com"
+        };
+
+        _mockEventRepo.Setup(r => r.GetByIdAsync(1)).ReturnsAsync(evt);
+        _mockTierCategoryRepo.Setup(r => r.GetByIdAsync(2)).ReturnsAsync(category);
+
+        // Act
+        var result = await _controller.PurchaseTickets(request);
+
+        // Assert
+        result.Result.Should().BeOfType<BadRequestObjectResult>();
+    }
+
+    [Fact]
+    public async Task PurchaseTickets_WhenNotEnoughTicketsAvailable_ReturnsBadRequest()
+    {
+        // Arrange
+        var evt = new Event
+        {
+            Id = 1,
+            Name = "Test Event",
+            TierId = 1,
+            TotalTicketing = 10,
+            EventTierCategories = new List<EventTierCategory>
+            {
+                new() { EventId = 1, TierCategoryId = 1 }
+            }
+        };
+
+        var category = new TierCategory
+        {
+            Id = 1,
+            TierId = 1,
+            Name = "VIP"
+        };
+
+        var request = new PurchaseTicketRequest
+        {
+            EventId = 1,
+            CategoryId = 1,
+            Quantity = 5,
+            BuyerName = "John Doe",
+            BuyerEmail = "john@example.com"
+        };
+
+        _mockEventRepo.Setup(r => r.GetByIdAsync(1)).ReturnsAsync(evt);
+        _mockTierCategoryRepo.Setup(r => r.GetByIdAsync(1)).ReturnsAsync(category);
+        _mockTicketRepo.Setup(r => r.CountByEventAndCategoryAsync(1, 1)).ReturnsAsync(8); // Only 2 left
+
+        // Act
+        var result = await _controller.PurchaseTickets(request);
+
+        // Assert
+        result.Result.Should().BeOfType<BadRequestObjectResult>();
+    }
+
+    [Fact]
+    public async Task PurchaseTickets_WhenValid_ReturnsCreatedResult()
+    {
+        // Arrange
+        var evt = new Event
+        {
+            Id = 1,
+            Name = "Test Event",
+            TierId = 1,
+            TotalTicketing = 100,
+            EventTierCategories = new List<EventTierCategory>
+            {
+                new() { EventId = 1, TierCategoryId = 1 }
+            }
+        };
+
+        var category = new TierCategory
+        {
+            Id = 1,
+            TierId = 1,
+            Name = "VIP"
+        };
+
+        var request = new PurchaseTicketRequest
+        {
+            EventId = 1,
+            CategoryId = 1,
+            Quantity = 2,
+            BuyerName = "John Doe",
+            BuyerEmail = "john@example.com"
+        };
+
+        _mockEventRepo.Setup(r => r.GetByIdAsync(1)).ReturnsAsync(evt);
+        _mockTierCategoryRepo.Setup(r => r.GetByIdAsync(1)).ReturnsAsync(category);
+        _mockTicketRepo.Setup(r => r.CountByEventAndCategoryAsync(1, 1)).ReturnsAsync(0);
+        _mockUow.Setup(u => u.SaveChangesAsync()).ReturnsAsync(2);
+
+        // Act
+        var result = await _controller.PurchaseTickets(request);
+
+        // Assert
+        result.Result.Should().BeOfType<CreatedAtActionResult>();
+        var createdResult = result.Result as CreatedAtActionResult;
+        var response = createdResult!.Value as PurchaseTicketResponse;
+        response!.Success.Should().BeTrue();
+        response.Tickets.Should().HaveCount(2);
+        response.TotalPrice.Should().Be(100m); // 2 tickets * 50
+    }
+
+    [Fact]
+    public async Task GetTicketsByEmail_WhenNoTickets_ReturnsNotFound()
+    {
+        // Arrange
+        _mockTicketRepo.Setup(r => r.GetByBuyerEmailAsync("test@example.com"))
+            .ReturnsAsync(new List<Ticket>());
+
+        // Act
+        var result = await _controller.GetTicketsByEmail("test@example.com");
+
+        // Assert
+        result.Result.Should().BeOfType<NotFoundObjectResult>();
+    }
+
+    [Fact]
+    public async Task GetTicketsByEmail_WhenTicketsExist_ReturnsTickets()
+    {
+        // Arrange
+        var tickets = new List<Ticket>
+        {
+            new()
+            {
+                Id = 1,
+                TicketNumber = "TKT-001",
+                EventId = 1,
+                Event = new Event { Id = 1, Name = "Event 1", TierId = 1 },
+                CategoryId = 1,
+                Category = new TierCategory { Id = 1, Name = "VIP", TierId = 1 },
+                BuyerEmail = "test@example.com",
+                BuyerName = "Test User",
+                Price = 50m,
+                PurchaseDate = DateTime.UtcNow,
+                Status = TicketStatus.Active
+            }
+        };
+
+        _mockTicketRepo.Setup(r => r.GetByBuyerEmailAsync("test@example.com"))
+            .ReturnsAsync(tickets);
+
+        // Act
+        var result = await _controller.GetTicketsByEmail("test@example.com");
+
+        // Assert
+        result.Result.Should().BeOfType<OkObjectResult>();
+        var okResult = result.Result as OkObjectResult;
+        var response = okResult!.Value as TicketListResponse;
+        response!.Total.Should().Be(1);
+        response.Tickets.Should().HaveCount(1);
+    }
+
+    [Fact]
+    public async Task GetTicket_WhenTicketNotFound_ReturnsNotFound()
+    {
+        // Arrange
+        _mockTicketRepo.Setup(r => r.GetByIdAsync(999)).ReturnsAsync((Ticket?)null);
+
+        // Act
+        var result = await _controller.GetTicket(999);
+
+        // Assert
+        result.Result.Should().BeOfType<NotFoundObjectResult>();
+    }
+
+    [Fact]
+    public async Task GetTicket_WhenTicketExists_ReturnsTicket()
+    {
+        // Arrange
+        var ticket = new Ticket
+        {
+            Id = 1,
+            TicketNumber = "TKT-001",
+            EventId = 1,
+            Event = new Event { Id = 1, Name = "Event 1", TierId = 1 },
+            CategoryId = 1,
+            Category = new TierCategory { Id = 1, Name = "VIP", TierId = 1 },
+            BuyerEmail = "test@example.com",
+            BuyerName = "Test User",
+            Price = 50m,
+            PurchaseDate = DateTime.UtcNow,
+            Status = TicketStatus.Active
+        };
+
+        _mockTicketRepo.Setup(r => r.GetByIdAsync(1)).ReturnsAsync(ticket);
+
+        // Act
+        var result = await _controller.GetTicket(1);
+
+        // Assert
+        result.Result.Should().BeOfType<OkObjectResult>();
+        var okResult = result.Result as OkObjectResult;
+        var response = okResult!.Value as TicketResponse;
+        response!.Id.Should().Be(1);
+        response.TicketNumber.Should().Be("TKT-001");
+    }
+
+    [Fact]
+    public async Task MarkTicketAsUsed_WhenTicketNotFound_ReturnsNotFound()
+    {
+        // Arrange
+        _mockTicketRepo.Setup(r => r.GetByIdAsync(999)).ReturnsAsync((Ticket?)null);
+
+        // Act
+        var result = await _controller.MarkTicketAsUsed(999);
+
+        // Assert
+        result.Result.Should().BeOfType<NotFoundObjectResult>();
+    }
+
+    [Fact]
+    public async Task MarkTicketAsUsed_WhenTicketNotActive_ReturnsBadRequest()
+    {
+        // Arrange
+        var ticket = new Ticket
+        {
+            Id = 1,
+            TicketNumber = "TKT-001",
+            EventId = 1,
+            Event = new Event { Id = 1, Name = "Event 1", TierId = 1 },
+            CategoryId = 1,
+            Category = new TierCategory { Id = 1, Name = "VIP", TierId = 1 },
+            BuyerEmail = "test@example.com",
+            BuyerName = "Test User",
+            Price = 50m,
+            PurchaseDate = DateTime.UtcNow,
+            Status = TicketStatus.Used
+        };
+
+        _mockTicketRepo.Setup(r => r.GetByIdAsync(1)).ReturnsAsync(ticket);
+
+        // Act
+        var result = await _controller.MarkTicketAsUsed(1);
+
+        // Assert
+        result.Result.Should().BeOfType<BadRequestObjectResult>();
+    }
+
+    [Fact]
+    public async Task MarkTicketAsUsed_WhenValid_ReturnsOkWithUpdatedTicket()
+    {
+        // Arrange
+        var ticket = new Ticket
+        {
+            Id = 1,
+            TicketNumber = "TKT-001",
+            EventId = 1,
+            Event = new Event { Id = 1, Name = "Event 1", TierId = 1 },
+            CategoryId = 1,
+            Category = new TierCategory { Id = 1, Name = "VIP", TierId = 1 },
+            BuyerEmail = "test@example.com",
+            BuyerName = "Test User",
+            Price = 50m,
+            PurchaseDate = DateTime.UtcNow,
+            Status = TicketStatus.Active
+        };
+
+        _mockTicketRepo.Setup(r => r.GetByIdAsync(1)).ReturnsAsync(ticket);
+        _mockUow.Setup(u => u.SaveChangesAsync()).ReturnsAsync(1);
+
+        // Act
+        var result = await _controller.MarkTicketAsUsed(1);
+
+        // Assert
+        result.Result.Should().BeOfType<OkObjectResult>();
+        ticket.Status.Should().Be(TicketStatus.Used);
+    }
+
+    [Fact]
+    public async Task CancelTicket_WhenTicketAlreadyUsed_ReturnsBadRequest()
+    {
+        // Arrange
+        var ticket = new Ticket
+        {
+            Id = 1,
+            TicketNumber = "TKT-001",
+            EventId = 1,
+            Event = new Event { Id = 1, Name = "Event 1", TierId = 1 },
+            CategoryId = 1,
+            Category = new TierCategory { Id = 1, Name = "VIP", TierId = 1 },
+            BuyerEmail = "test@example.com",
+            BuyerName = "Test User",
+            Price = 50m,
+            PurchaseDate = DateTime.UtcNow,
+            Status = TicketStatus.Used
+        };
+
+        _mockTicketRepo.Setup(r => r.GetByIdAsync(1)).ReturnsAsync(ticket);
+
+        // Act
+        var result = await _controller.CancelTicket(1);
+
+        // Assert
+        result.Result.Should().BeOfType<BadRequestObjectResult>();
+    }
+
+    [Fact]
+    public async Task CancelTicket_WhenValid_ReturnsOkWithCancelledTicket()
+    {
+        // Arrange
+        var ticket = new Ticket
+        {
+            Id = 1,
+            TicketNumber = "TKT-001",
+            EventId = 1,
+            Event = new Event { Id = 1, Name = "Event 1", TierId = 1 },
+            CategoryId = 1,
+            Category = new TierCategory { Id = 1, Name = "VIP", TierId = 1 },
+            BuyerEmail = "test@example.com",
+            BuyerName = "Test User",
+            Price = 50m,
+            PurchaseDate = DateTime.UtcNow,
+            Status = TicketStatus.Active
+        };
+
+        _mockTicketRepo.Setup(r => r.GetByIdAsync(1)).ReturnsAsync(ticket);
+        _mockUow.Setup(u => u.SaveChangesAsync()).ReturnsAsync(1);
+
+        // Act
+        var result = await _controller.CancelTicket(1);
+
+        // Assert
+        result.Result.Should().BeOfType<OkObjectResult>();
+        ticket.Status.Should().Be(TicketStatus.Cancelled);
+    }
+
+    [Fact]
+    public async Task GetEventStatistics_WhenEventNotFound_ReturnsNotFound()
+    {
+        // Arrange
+        _mockEventRepo.Setup(r => r.GetByIdAsync(999)).ReturnsAsync((Event?)null);
+
+        // Act
+        var result = await _controller.GetEventStatistics(999);
+
+        // Assert
+        result.Result.Should().BeOfType<NotFoundObjectResult>();
+    }
+
+    [Fact]
+    public async Task GetEventStatistics_WhenEventExists_ReturnsStatistics()
+    {
+        // Arrange
+        var evt = new Event
+        {
+            Id = 1,
+            Name = "Test Event",
+            TierId = 1,
+            TotalTicketing = 100
+        };
+
+        var tickets = new List<Ticket>
+        {
+            new() { Id = 1, EventId = 1, Price = 50m, Status = TicketStatus.Active },
+            new() { Id = 2, EventId = 1, Price = 50m, Status = TicketStatus.Used },
+            new() { Id = 3, EventId = 1, Price = 50m, Status = TicketStatus.Cancelled }
+        };
+
+        _mockEventRepo.Setup(r => r.GetByIdAsync(1)).ReturnsAsync(evt);
+        _mockTicketRepo.Setup(r => r.GetByEventIdRawAsync(1)).ReturnsAsync(tickets);
+
+        // Act
+        var result = await _controller.GetEventStatistics(1);
+
+        // Assert
+        result.Result.Should().BeOfType<OkObjectResult>();
+        var okResult = result.Result as OkObjectResult;
+        var stats = okResult!.Value as TicketStatistics;
+        stats!.TotalTicketsSold.Should().Be(3);
+        stats.TotalTicketsActive.Should().Be(1);
+        stats.TotalTicketsUsed.Should().Be(1);
+        stats.TotalTicketsCancelled.Should().Be(1);
+        stats.TotalRevenue.Should().Be(100m); // Active + Used = 2 * 50
+        stats.AvailableTickets.Should().Be(97);
+    }
+}
