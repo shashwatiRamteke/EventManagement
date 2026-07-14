@@ -1,0 +1,93 @@
+﻿using EventManagementApi2.Models;
+using EventManagementApi2.Data;
+using Microsoft.EntityFrameworkCore;
+
+namespace EventManagementApi2.Tests.Helpers;
+
+public static class TestDataBuilder
+{
+    public static EventContext CreateInMemoryContext(string databaseName)
+    {
+        var options = new DbContextOptionsBuilder<EventContext>()
+            .UseInMemoryDatabase(databaseName)
+            .Options;
+
+        return new EventContext(options);
+    }
+
+    public static Tier CreateTier(int id = 1, string name = "Premium")
+    {
+        return new Tier
+        {
+            Id = id,
+            Name = name
+        };
+    }
+
+    public static TierCategory CreateTierCategory(int id = 1, int tierId = 1, string name = "VIP")
+    {
+        return new TierCategory
+        {
+            Id = id,
+            TierId = tierId,
+            Name = name
+        };
+    }
+
+    public static Event CreateEvent(int id = 1, int tierId = 1, string name = "Test Event", int totalTicketing = 100)
+    {
+        return new Event
+        {
+            Id = id,
+            Name = name,
+            Description = "Test Description",
+            Venue = "Test Venue",
+            Date = DateTime.UtcNow.AddDays(30),
+            Time = new TimeSpan(19, 0, 0),
+            TotalTicketing = totalTicketing,
+            TierId = tierId,
+            EventTierCategories = []
+        };
+    }
+
+    public static Ticket CreateTicket(int id = 1, int eventId = 1, int categoryId = 1, string buyerEmail = "test@example.com")
+    {
+        return new Ticket
+        {
+            Id = id,
+            TicketNumber = $"TKT-{eventId:D4}-{categoryId:D3}-{DateTime.UtcNow.Ticks:D10}-1234",
+            EventId = eventId,
+            CategoryId = categoryId,
+            BuyerEmail = buyerEmail,
+            BuyerName = "Test Buyer",
+            BuyerPhone = "1234567890",
+            Price = 50m,
+            PurchaseDate = DateTime.UtcNow,
+            Status = TicketStatus.Active,
+            Notes = "Test ticket"
+        };
+    }
+
+    public static EventTierCategory CreateEventTierCategory(int eventId = 1, int tierCategoryId = 1)
+    {
+        return new EventTierCategory
+        {
+            EventId = eventId,
+            TierCategoryId = tierCategoryId
+        };
+    }
+
+    public static void SeedTestData(EventContext context)
+    {
+        var tier = CreateTier(1, "Premium");
+        var category = CreateTierCategory(1, 1, "VIP");
+        var evt = CreateEvent(1, 1, "Rock Concert", 100);
+        var eventTierCategory = CreateEventTierCategory(1, 1);
+
+        context.Tiers.Add(tier);
+        context.TierCategories.Add(category);
+        context.Events.Add(evt);
+        context.EventTierCategories.Add(eventTierCategory);
+        context.SaveChanges();
+    }
+}

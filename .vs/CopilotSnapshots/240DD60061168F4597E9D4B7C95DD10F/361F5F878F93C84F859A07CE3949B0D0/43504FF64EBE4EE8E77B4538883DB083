@@ -1,0 +1,89 @@
+﻿using Scalar.AspNetCore;
+using Microsoft.EntityFrameworkCore;
+using EventManagementApi2.Data;
+
+var builder = WebApplication.CreateBuilder(args);
+
+// Add services to the container
+builder.Services.AddControllers();
+
+// Database configuration
+builder.Services.AddDbContext<EventContext>(options => 
+    options.UseInMemoryDatabase("EventsDb"));
+
+// OpenAPI/Scalar configuration
+builder.Services.AddOpenApi();
+
+// CORS configuration for production
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy("ProductionPolicy", corsPolicyBuilder =>
+    {
+        corsPolicyBuilder
+            .AllowAnyOrigin()
+            .AllowAnyMethod()
+            .AllowAnyHeader();
+    });
+});
+
+var app = builder.Build();
+
+// Enable CORS
+app.UseCors("ProductionPolicy");
+
+// Configure the HTTP request pipeline
+if (app.Environment.IsDevelopment())
+{
+    app.MapOpenApi();
+    app.MapScalarApiReference();
+}
+
+// Production health check endpoints
+app.MapGet("/health", () => Results.Ok(new { status = "healthy", timestamp = DateTime.UtcNow }))
+    .WithName("HealthCheck")
+    .WithOpenApi();
+
+// Readiness check endpoint
+app.MapGet("/ready", () =>
+{
+    try
+    {
+        return Results.Ok(new { ready = true, timestamp = DateTime.UtcNow });
+    }
+    catch
+    {
+        return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
+    }
+})
+.WithName("ReadinessCheck")
+.WithOpenApi();
+
+// HTTPS redirection (optional in container)
+if (!app.Environment.IsDevelopment())
+{
+    // app.UseHttpsRedirection(); // Uncomment if using HTTPS
+}
+
+app.UseAuthorization();
+
+// Map all controllers (including TicketsController)
+app.MapControllers();
+
+// Seed database on startup
+using (var scope = app.Services.CreateScope())
+{
+    var context = scope.ServiceProvider.GetRequiredService<EventContext>();
+
+    try
+    {
+        // Seed initial data
+        EventSeeder.Seed(context);
+        app.Logger.LogInformation("Database seeded successfully");
+    }
+    catch (Exception ex)
+    {
+        app.Logger.LogError(ex, "Error seeding database");
+    }
+}
+
+app.Run();

@@ -1,0 +1,116 @@
+﻿using Scalar.AspNetCore;
+using Microsoft.EntityFrameworkCore;
+using EventManagementApi2.Data;
+using System.Reflection;
+
+var builder = WebApplication.CreateBuilder(args);
+
+// Add services to the container
+builder.Services.AddControllers();
+
+// Database configuration
+builder.Services.AddDbContext<EventContext>(options => 
+    options.UseInMemoryDatabase("EventsDb"));
+
+// OpenAPI/Swagger configuration with XML comments
+builder.Services.AddOpenApi();
+builder.Services.AddSwaggerGen(c =>
+{
+    c.SwaggerDoc("v1", new Microsoft.OpenApi.Models.OpenApiInfo
+    {
+        Version = "v2.0",
+        Title = "Event Management API",
+        Description = "Comprehensive Event Management System with Ticket Purchase Support",
+        Contact = new Microsoft.OpenApi.Models.OpenApiContact
+        {
+            Name = "Event Management Team"
+        }
+    });
+
+    // Include XML comments from Ticket Controller
+    var xmlFile = $"{Assembly.GetExecutingAssembly().GetName().Name}.xml";
+    var xmlPath = Path.Combine(AppContext.BaseDirectory, xmlFile);
+    if (File.Exists(xmlPath))
+    {
+        c.IncludeXmlComments(xmlPath);
+    }
+});
+
+// CORS configuration for production
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy("ProductionPolicy", corsPolicyBuilder =>
+    {
+        corsPolicyBuilder
+            .AllowAnyOrigin()
+            .AllowAnyMethod()
+            .AllowAnyHeader();
+    });
+});
+
+var app = builder.Build();
+
+// Enable CORS
+app.UseCors("ProductionPolicy");
+
+// Configure the HTTP request pipeline
+if (app.Environment.IsDevelopment())
+{
+    app.MapOpenApi();
+    app.MapScalarApiReference();
+}
+
+// Production endpoints
+if (!app.Environment.IsDevelopment())
+{
+    // Health check endpoint (for container orchestration)
+    app.MapGet("/health", () => Results.Ok(new { status = "healthy", timestamp = DateTime.UtcNow }))
+        .WithName("HealthCheck")
+        .WithOpenApi();
+
+    // Readiness check endpoint
+    app.MapGet("/ready", async (EventContext db) =>
+    {
+        try
+        {
+            await db.Database.ExecuteSqlRawAsync("SELECT 1");
+            return Results.Ok(new { ready = true, timestamp = DateTime.UtcNow });
+        }
+        catch
+        {
+            return Results.ServiceUnavailable();
+        }
+    })
+    .WithName("ReadinessCheck")
+    .WithOpenApi();
+}
+
+// HTTPS redirection (optional in container)
+if (!app.Environment.IsDevelopment())
+{
+    // app.UseHttpsRedirection(); // Uncomment if using HTTPS
+}
+
+app.UseAuthorization();
+
+// Map all controllers (including TicketsController)
+app.MapControllers();
+
+// Seed database on startup
+using (var scope = app.Services.CreateScope())
+{
+    var context = scope.ServiceProvider.GetRequiredService<EventContext>();
+
+    try
+    {
+        // Seed initial data
+        EventSeeder.Seed(context);
+        app.Logger.LogInformation("Database seeded successfully");
+    }
+    catch (Exception ex)
+    {
+        app.Logger.LogError(ex, "Error seeding database");
+    }
+}
+
+app.Run();

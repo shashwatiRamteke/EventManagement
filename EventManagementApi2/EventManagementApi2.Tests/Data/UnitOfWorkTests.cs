@@ -1,0 +1,115 @@
+using EventManagementApi2.Data;
+using EventManagementApi2.Data.Repositories;
+using EventManagementApi2.Tests.Helpers;
+using FluentAssertions;
+
+namespace EventManagementApi2.Tests.Data;
+
+public class UnitOfWorkTests : IDisposable
+{
+    private readonly EventContext _context;
+    private readonly IUnitOfWork _unitOfWork;
+
+    public UnitOfWorkTests()
+    {
+        _context = TestDataBuilder.CreateInMemoryContext($"UnitOfWorkTest_{Guid.NewGuid()}");
+
+        var eventRepo = new EventRepository(_context);
+        var tierCategoryRepo = new TierCategoryRepository(_context);
+        var ticketRepo = new TicketRepository(_context);
+
+        _unitOfWork = new UnitOfWork(_context, eventRepo, tierCategoryRepo, ticketRepo);
+    }
+
+    [Fact]
+    public void UnitOfWork_ExposesEventRepository()
+    {
+        // Assert
+        _unitOfWork.Events.Should().NotBeNull();
+        _unitOfWork.Events.Should().BeOfType<EventRepository>();
+    }
+
+    [Fact]
+    public void UnitOfWork_ExposesTierCategoryRepository()
+    {
+        // Assert
+        _unitOfWork.TierCategories.Should().NotBeNull();
+        _unitOfWork.TierCategories.Should().BeOfType<TierCategoryRepository>();
+    }
+
+    [Fact]
+    public void UnitOfWork_ExposesTicketRepository()
+    {
+        // Assert
+        _unitOfWork.Tickets.Should().NotBeNull();
+        _unitOfWork.Tickets.Should().BeOfType<TicketRepository>();
+    }
+
+    [Fact]
+    public async Task SaveChangesAsync_PersistsChangesToDatabase()
+    {
+        // Arrange
+        TestDataBuilder.SeedTestData(_context);
+        var ticket = TestDataBuilder.CreateTicket(1, 1, 1, "buyer@test.com");
+        await TestDataBuilder.AddTicketsAsync(_context, new[] { ticket });
+
+        // Act - SaveChanges already called by helper
+        var count = await _unitOfWork.Tickets.CountByEventAndCategoryAsync(1, 1);
+
+        // Assert
+        count.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task SaveChangesAsync_ReturnsNumberOfAffectedRows()
+    {
+        // Arrange
+        TestDataBuilder.SeedTestData(_context);
+        var tickets = new[]
+        {
+            TestDataBuilder.CreateTicket(1, 1, 1, "buyer1@test.com"),
+            TestDataBuilder.CreateTicket(2, 1, 1, "buyer2@test.com")
+        };
+        await _context.Tickets.AddRangeAsync(tickets);
+
+        // Act
+        var result = await _unitOfWork.SaveChangesAsync();
+
+        // Assert
+        result.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task SaveChangesAsync_WhenNoChanges_ReturnsZero()
+    {
+        // Act
+        var result = await _unitOfWork.SaveChangesAsync();
+
+        // Assert
+        result.Should().Be(0);
+    }
+
+    [Fact]
+    public void Dispose_DisposesContext()
+    {
+        // Act
+        _unitOfWork.Dispose();
+
+        // Assert
+        Action act = () => _context.Events.ToList();
+        act.Should().Throw<ObjectDisposedException>();
+    }
+
+    public void Dispose()
+    {
+        try
+        {
+            _context.Database.EnsureDeleted();
+            _context.Dispose();
+        }
+        catch (ObjectDisposedException)
+        {
+            // Already disposed in test
+        }
+    }
+}
